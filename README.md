@@ -30,8 +30,7 @@ at the higher resolutions.
 
 ### Human chosen samples
 
-<img src="./deepfakes.png">
-<img src="./deepfakes2.png">
+<img src="./deepfakes.png"><img src="./deepfakes2.png">
 
 ### Samples chosen by the discriminator
 
