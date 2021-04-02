@@ -13,9 +13,9 @@ on to the next resolution anyway.
 This simplifies the implementation of each resolution's model and the
 code for fading in new layers.
 
-## Implementation
+## Colab implementation
 
-The model is implemented in `ProgressiveGAN.ipynb`. The notebook is meant
+The model is implemented in `colab/ProgressiveGAN.ipynb`. The notebook is meant
 to be run using [Google Colab](https://colab.research.google.com) on a
 GPU runtime. The model only takes about a day to train up to the 32x32 resolution.
 
