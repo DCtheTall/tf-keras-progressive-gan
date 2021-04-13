@@ -98,7 +98,7 @@ class Lerp(tf.keras.layers.Layer):
 
   def call(self, a, b, *args, **kwargs):
     """Call method for functional API."""
-    return a + (b - a) * self.t
+    return a + (b - a) * K.clip(self.t, 0.0, 1.0)
 
 
 def resolution_label(res_log2):
@@ -174,47 +174,33 @@ def G(latent_size=None,  # Dimensionality of latent space.
     latent_size = min(fmap_base, fmap_max)
 
   partial_nfilters = lambda n: n_filters(n, fmap_base, fmap_max, fmap_decay)
-
   opts = {
-      'use_wscale': use_wscale,
-      'use_pixel_norm': use_pixel_norm,
-      'use_leaky_relu': use_leaky_relu,
+    'use_wscale': use_wscale,
+    'use_pixel_norm': use_pixel_norm,
+    'use_leaky_relu': use_leaky_relu,
   }
-
   # We can set the value of this during training with a callback.
-  alpha = K.variable(0.0, dtype='float32', name='alpha')
-
-  models = {}
+  lod_in = K.variable(0.0, dtype='float32', name='lod_in')
   resolution_log2 = int(np.log2(resolution))
 
-  for max_res_log2 in range(2, resolution_log2 + 1):
-    latents_in = tf.keras.layers.Input(shape=(latent_size,), name='latents_in')
-    x = latents_in
-    if normalize_latents:
-      x = pixelwise_feature_norm(x)
-    x = G_block(x, 2, partial_nfilters, **opts)
-    img = ToRGB(x, num_channels, **opts, name='4x4_to_rgb')
+  latents_in = tf.keras.layers.Input(shape=(latent_size,), name='latents_in')
+  x = latents_in
+  if normalize_latents:
+    x = pixelwise_feature_norm(x)
 
-    if max_res_log2 == 2:
-      models['4x4'] = tf.keras.models.Model(latents_in, img)
-      continue
+  x = G_block(latents_in, 2, partial_nfilters, **opts)
+  img_out = ToRGB(x, num_channels, **opts, name='4x4_to_rgb')
+  
+  for res_log2 in range(3, resolution_log2 + 1):
+    lod = resolution_log2 - res_log2
+    x = G_block(x, res_log2, partial_nfilters, **opts)
+    img = ToRGB(x, num_channels, **opts,
+                name='{}_to_rgb'.format(resolution_label(res_log2)))
+    img_out = Lerp(lod_in - lod)(img, tf.keras.layers.UpSampling2D()(img_out))
+  
+  model = tf.keras.models.Model(latents_in, img_out)
 
-    img_prev = img
-
-    for res_log2 in range(3, max_res_log2 + 1):
-      x = G_block(x, res_log2, partial_nfilters, **opts)
-      if res_log2 == (max_res_log2 - 1):
-        img_prev = ToRGB(x, num_channels, **opts,
-                         name='{}_to_rgb'.format(resolution_label(res_log2)))
-      if res_log2 == max_res_log2:
-        img = ToRGB(x, num_channels, **opts,
-                    name='{}_to_rgb'.format(resolution_label(res_log2)))
-        img = Lerp(alpha)(tf.keras.layers.UpSampling2D()(img_prev), img)
-
-    label = resolution_label(max_res_log2)
-    models[label] = tf.keras.models.Model(latents_in, [img, img_prev])
-
-  return models, alpha
+  return model, lod_in
 
 
 def MinibatchStddev(x, group_size):
@@ -291,7 +277,7 @@ def FromRGB(x, filters,
 
 
 def D(num_channels=3,  # Number of channels images have.
-      resolution=64,  # Max image resolution.
+      resolution=128,  # Max image resolution.
       fmap_base=8192,
       fmap_max=512,  # Max filters in each conv layer.
       fmap_decay=1.0,
@@ -300,174 +286,32 @@ def D(num_channels=3,  # Number of channels images have.
       **unused_kwargs):
   """Build the discriminator networks for each size."""
   partial_nfilters = lambda n: n_filters(n, fmap_base, fmap_max, fmap_decay)
-  resolution_log2 = int(np.log2(resolution))
   opts = {
-      'use_wscale': use_wscale,
-      'mbstd_group_size': mbstd_group_size,
+    'use_wscale': use_wscale,
+    'mbstd_group_size': mbstd_group_size,
   }
-
   # We can set the value of this during training with a callback.
-  alpha = K.variable(0.0, dtype='float32', name='alpha')
-  img_ins = {
-      resolution_label(res_log2): tf.keras.layers.Input(
-          shape=(1 << res_log2, 1 << res_log2, num_channels))
-      for res_log2 in range(2, resolution_log2 + 1)
-  }
-  outputs = {}
+  lod_in = K.variable(0.0, dtype='float32', name='lod_in')
+  resolution_log2 = int(np.log2(resolution))
 
-  for max_res_log2 in range(2, resolution_log2 + 1):
-    label = resolution_label(max_res_log2)
-    x = img_ins[label]
-    x = FromRGB(x, filters=partial_nfilters(max_res_log2 - 1),
-                name='{}_from_rgb'.format(label), **opts)
-    for res_log2 in range(max_res_log2, 2, -1):
-      x = D_block(x, res_log2, partial_nfilters, **opts)
-      if res_log2 == max_res_log2:
-        prev_label = resolution_label(res_log2 - 1)
-        prev_img = img_ins[prev_label]
-        y = FromRGB(prev_img, partial_nfilters(res_log2 - 2),
-                    name='{}_from_rgb'.format(prev_label), **opts)
-        x = Lerp(alpha)(y, x)
-    outputs[label] = D_block(x, 2, partial_nfilters, **opts)
+  img_in = tf.keras.layers.Input(
+      shape=(resolution, resolution, num_channels))
 
-  models = {}
-  for res_log2 in range(2, resolution_log2 + 1):
-    label = resolution_label(res_log2)
-    ins = [img_ins[label]]
-    if res_log2 > 2:
-      ins.append(img_ins[resolution_label(res_log2 - 1)])
-    models[label] = tf.keras.models.Model(ins, outputs[label])
-  
-  return models, alpha
+  img = img_in
+  x = FromRGB(img, filters=partial_nfilters(resolution_log2 - 1),
+              name='{}_from_rgb0'.format(resolution_label(resolution_log2)),
+              **opts)
 
+  for res_log2 in range(resolution_log2, 2, -1):
+    lod = resolution_log2 - res_log2
+    x = D_block(x, res_log2, partial_nfilters, **opts)
+    img = Downscale2D(img)
+    y = FromRGB(img, filters=partial_nfilters(res_log2 - 2),
+                name='{}_from_rgb'.format(resolution_label(res_log2)),
+                **opts)
+    x = Lerp(lod_in - lod)(x, y)
 
-class WGANGP(tf.keras.models.Model):
-  """
-  A single WGAN-GP network.
+  output = D_block(x, 2, partial_nfilters, **opts)
+  model = tf.keras.models.Model(img_in, output)
 
-  This implements the training objective for a single resolution
-  of ProGAN. This model is applied iteratively over each resolution
-  with a fresh optimizer. The motivation of ProGAN is to treat each
-  resolution as an entirely different learning task, and uses the
-  pretrained lower layers for transfer learning.
-
-  In order to properly implement the gradient penalty loss term
-  with TensorFlow 2.x, we need to extend the Keras model with
-  our own custom training method. Since we have to use this model
-  extension, we can also encapsulate the "fading in" the next
-  resolutions.
-  
-  """
-
-  def __init__(self,
-               resolution,
-               G,
-               D,
-               G_optimizer,
-               D_optimizer,
-               batch_size,
-               latent_size,
-               G_alpha=None,
-               D_alpha=None,
-               gradient_weight=10.0,
-               D_repeat=1,
-               *args, **kwargs):
-    super(WGANGP, self).__init__(*args, **kwargs)
-    self.resolution = resolution
-    self.G = G
-    self.D = D
-    self.G_optimizer = G_optimizer
-    self.D_optimizer = D_optimizer
-    self.batch_size = batch_size
-    self.latent_size = latent_size
-    self.gradient_weight = gradient_weight
-
-    self.G_alpha = G_alpha
-    self.D_alpha = D_alpha
-
-    self.D_repeat = D_repeat
-
-  def compute_D_loss(self, real_imgs):
-    """Compute discriminator loss terms."""
-
-    # Generate the image at lower resolution for layer fading.
-    latents_in = np.random.normal(size=(self.batch_size, self.latent_size))
-    if self.resolution > 4:
-      fake_imgs = self.G(latents_in)
-      interp_imgs = [self.interpolate_imgs(real_imgs[i], fake_imgs[i])
-                     for i in range(2)]
-    else:
-      fake_imgs = [self.G(latents_in)]
-      interp_imgs = [self.interpolate_imgs(real_imgs[0], fake_imgs[0])]
-    
-    real_pred = self.D(real_imgs)
-    fake_pred = self.D(fake_imgs)
-
-    real_loss = tf.reduce_mean(real_pred)
-    fake_loss = -tf.reduce_mean(fake_pred)
-    gp_loss = self.gradient_penalty(interp_imgs)
-
-    return real_loss, fake_loss, gp_loss
-
-  def interpolate_imgs(self, real_img, fake_img):
-    """Interpolate real and fake images for GP loss calculation."""
-    w = tf.random.uniform([self.batch_size, 1, 1, 1], 0.0, 1.0)
-    return (w * real_img) + ((1.0 - w) * fake_img)
-
-  def gradient_penalty(self, interp_imgs):
-    """Compute gradient penalty loss."""
-    with tf.GradientTape() as tape:
-      tape.watch(interp_imgs)
-      interp_pred = self.D(interp_imgs)
-    grads = tape.gradient(interp_pred, interp_imgs)[0]
-    ddx = K.sqrt(K.sum(tf.square(grads), axis=np.arange(1, len(grads.shape))))
-    loss = tf.reduce_mean(tf.square(1.0 - ddx))
-    return self.gradient_weight * loss
-
-  def compute_G_loss(self):
-    """Compute G loss."""
-    latents_in = np.random.normal(size=(self.batch_size, self.latent_size))
-
-    # For fading in the new layer.
-    if self.resolution > 4:
-      fake_imgs = self.G(latents_in)
-    else:
-      fake_imgs = [self.G(latents_in)]
-
-    fake_pred = self.D(fake_imgs)
-    return tf.reduce_mean(fake_pred)
-
-  def compute_D_gradients(self, real_imgs, print_loss=False):
-    """Compute the discriminator loss gradients."""
-    with tf.GradientTape() as tape:
-      D_loss_real, D_loss_fake, D_loss_gp = self.compute_D_loss(real_imgs)
-      D_loss = D_loss_real + D_loss_fake + D_loss_gp
-
-    if print_loss:
-      print('D Loss: R: {:04f} F: {:04f} GP: {:04f}'.format(
-          D_loss_real, D_loss_fake, D_loss_gp))
-    
-    return tape.gradient(D_loss, self.D.trainable_variables)
-
-  def compute_G_gradients(self, print_loss=False):
-    """Compute the generator loss gradients."""
-    with tf.GradientTape() as tape:
-      G_loss = self.compute_G_loss()
-
-    if print_loss:
-      print('G Loss: {:04f}'.format(G_loss))
-
-    return tape.gradient(G_loss, self.G.trainable_variables)
-
-  def train_on_batch(self, X_batch, alpha=None, print_loss=False):
-    """Train on a single batch of data."""
-    if alpha is not None:
-      K.set_value(self.G_alpha, alpha)
-      K.set_value(self.D_alpha, alpha)
-
-    for _ in range(self.D_repeat):
-      D_grads = self.compute_D_gradients(X_batch, print_loss)
-      self.D_optimizer.apply_gradients(zip(D_grads, self.D.trainable_variables))
-    
-    G_grads = self.compute_G_gradients(print_loss)
-    self.G_optimizer.apply_gradients(zip(G_grads, self.G.trainable_variables))
+  return model, lod_in
