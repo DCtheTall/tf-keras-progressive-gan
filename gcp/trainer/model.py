@@ -315,3 +315,131 @@ def D(num_channels=3,  # Number of channels images have.
   model = tf.keras.models.Model(img_in, output)
 
   return model, lod_in
+
+
+class WGANGP:
+  """
+  This class contains a method for training the adversarial model by batch.
+
+  It implements the training objective for the GAN for a particular resolution.
+  When one resolution completes training, the optimizers are overwritten with new
+  ones with the same parameters, and training begins at the next resolution.
+
+  In order to properly implement gradient penalty loss in TensorFlow 2.x, we
+  need to use a custom Keras model for this training objective.
+
+  """
+
+  def __init__(self,
+               resolution,
+               G,
+               D,
+               init_G_optimizer,
+               init_D_optimizer,
+               batch_size,
+               latent_size,
+               G_lod_in=None,
+               D_lod_in=None,
+               gradient_weight=10.0,
+               D_repeat=1,
+               *args, **kwargs):
+    super(WGANGP, self).__init__(*args, **kwargs)
+    self.resolution = resolution
+    self.G = G
+    self.D = D
+    self.batch_size = batch_size
+    self.latent_size = latent_size
+    self.gradient_weight = gradient_weight
+
+    self.init_G_optimizer = init_G_optimizer
+    self.init_D_optimizer = init_D_optimizer
+
+    self.G_lod_in = G_lod_in
+    self.D_lod_in = D_lod_in
+
+    self.D_repeat = D_repeat
+
+  def compute_D_loss(self, real_imgs):
+    """Compute discriminator loss terms."""
+
+    # Generate the image at lower resolution for layer fading.
+    latents_in = np.random.normal(size=(self.batch_size, self.latent_size))
+    if self.resolution > 4:
+      fake_imgs = self.G(latents_in)
+      interp_imgs = [self.interpolate_imgs(real_imgs[i], fake_imgs[i])
+                     for i in range(2)]
+    else:
+      fake_imgs = [self.G(latents_in)]
+      interp_imgs = [self.interpolate_imgs(real_imgs[0], fake_imgs[0])]
+    
+    real_pred = self.D(real_imgs)
+    fake_pred = self.D(fake_imgs)
+
+    real_loss = tf.reduce_mean(real_pred)
+    fake_loss = -tf.reduce_mean(fake_pred)
+    gp_loss = self.gradient_penalty(interp_imgs)
+
+    return real_loss, fake_loss, gp_loss
+
+  def interpolate_imgs(self, real_img, fake_img):
+    """Interpolate real and fake images for GP loss calculation."""
+    w = tf.random.uniform([self.batch_size, 1, 1, 1], 0.0, 1.0)
+    return (w * real_img) + ((1.0 - w) * fake_img)
+
+  def gradient_penalty(self, interp_imgs):
+    """Compute gradient penalty loss."""
+    with tf.GradientTape() as tape:
+      tape.watch(interp_imgs)
+      interp_pred = self.D(interp_imgs)
+    grads = tape.gradient(interp_pred, interp_imgs)[0]
+    ddx = K.sqrt(K.sum(tf.square(grads), axis=np.arange(1, len(grads.shape))))
+    loss = tf.reduce_mean(tf.square(1.0 - ddx))
+    return self.gradient_weight * loss
+
+  def compute_G_loss(self):
+    """Compute G loss."""
+    latents_in = np.random.normal(size=(self.batch_size, self.latent_size))
+
+    # For fading in the new layer.
+    if self.resolution > 4:
+      fake_imgs = self.G(latents_in)
+    else:
+      fake_imgs = [self.G(latents_in)]
+
+    fake_pred = self.D(fake_imgs)
+    return tf.reduce_mean(fake_pred)
+
+  def compute_D_gradients(self, real_imgs, print_loss=False):
+    """Compute the discriminator loss gradients."""
+    with tf.GradientTape() as tape:
+      D_loss_real, D_loss_fake, D_loss_gp = self.compute_D_loss(real_imgs)
+      D_loss = D_loss_real + D_loss_fake + D_loss_gp
+
+    if print_loss:
+      print('D Loss: R: {:04f} F: {:04f} GP: {:04f}'.format(
+          D_loss_real, D_loss_fake, D_loss_gp))
+    
+    return tape.gradient(D_loss, self.D.trainable_variables)
+
+  def compute_G_gradients(self, print_loss=False):
+    """Compute the generator loss gradients."""
+    with tf.GradientTape() as tape:
+      G_loss = self.compute_G_loss()
+
+    if print_loss:
+      print('G Loss: {:04f}'.format(G_loss))
+
+    return tape.gradient(G_loss, self.G.trainable_variables)
+
+  def train_on_batch(self, X_batch, alpha=None, print_loss=False):
+    """Train on a single batch of data."""
+    if alpha is not None:
+      K.set_value(self.G_alpha, alpha)
+      K.set_value(self.D_alpha, alpha)
+
+    for _ in range(self.D_repeat):
+      D_grads = self.compute_D_gradients(X_batch, print_loss)
+      self.D_optimizer.apply_gradients(zip(D_grads, self.D.trainable_variables))
+    
+    G_grads = self.compute_G_gradients(print_loss)
+    self.G_optimizer.apply_gradients(zip(G_grads, self.G.trainable_variables))
