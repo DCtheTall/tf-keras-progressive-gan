@@ -466,10 +466,8 @@ def compute_lod_in(lod, cur_img, transition_kimg):
       1.0, max(0.0, 1.0 - (float(cur_img) / (transition_kimg * 1000))))
 
 
-def save_model(output_path, gan):
+def save_model(export_path, gan):
   """Save the model parameters to GCS."""
-  export_path = os.path.join(
-      output_path, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
   gan.G.save(os.path.join(export_path, 'gen/'))
   gan.D.save(os.path.join(export_path, 'disc/'))
 
@@ -534,6 +532,9 @@ def train(resolution=128,
     if debug_mode:
       print(*args)
 
+  export_path = os.path.join(
+      output_path, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+
   for res_log2 in range(2, resolution_log2 + 1):
     cur_resolution = 1 << res_log2
     gan.init_optimizers(cur_resolution)
@@ -569,5 +570,5 @@ def train(resolution=128,
       gan.train_on_batch(X_batch, lod_in=lod_in_batch, print_loss=debug_mode)
       if i % save_every_n_batches == 0:
         debug_log('Saving weights...')
-        save_model(checkpoint_path, gan)
+        save_model(export_path, gan)
         debug_log('Done.')
