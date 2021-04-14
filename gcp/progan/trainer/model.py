@@ -1,9 +1,10 @@
+import datetime
 import numpy as np
 import os
 import tensorflow as tf
 import tensorflow.keras.backend as K
 
-from progam.trainer import data
+from progan.trainer import data
 
 
 def n_filters(stage, fmap_base, fmap_max, fmap_decay):
@@ -359,6 +360,7 @@ class WGANGP:
     self.gradient_weight = gradient_weight
     self.D_repeat = D_repeat
 
+    self.cur_resolution = None
     self.G_optimizer = None
     self.D_optimizer = None
 
@@ -367,6 +369,7 @@ class WGANGP:
 
   def init_optimizers(self, resolution):
     """Initialize the optimizers for the models"""
+    self.cur_resolution = resolution
     res_log2 = int(np.log2(resolution))
     lr = self.learning_rate * (self.learning_rate_decay ** (res_log2 - 2))
     self.G_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
@@ -379,13 +382,8 @@ class WGANGP:
 
     # Generate the image at lower resolution for layer fading.
     latents_in = np.random.normal(size=(self.batch_size, self.latent_size))
-    if self.resolution > 4:
-      fake_imgs = self.G(latents_in)
-      interp_imgs = [self.interpolate_imgs(real_imgs[i], fake_imgs[i])
-                     for i in range(2)]
-    else:
-      fake_imgs = [self.G(latents_in)]
-      interp_imgs = [self.interpolate_imgs(real_imgs[0], fake_imgs[0])]
+    fake_imgs = self.G(latents_in)
+    interp_imgs = self.interpolate_imgs(real_imgs, fake_imgs)
     
     real_pred = self.D(real_imgs)
     fake_pred = self.D(fake_imgs)
@@ -414,13 +412,7 @@ class WGANGP:
   def compute_G_loss(self):
     """Compute G loss."""
     latents_in = np.random.normal(size=(self.batch_size, self.latent_size))
-
-    # For fading in the new layer.
-    if self.resolution > 4:
-      fake_imgs = self.G(latents_in)
-    else:
-      fake_imgs = [self.G(latents_in)]
-
+    fake_imgs = self.G(latents_in)
     fake_pred = self.D(fake_imgs)
     return tf.reduce_mean(fake_pred)
 
@@ -484,7 +476,7 @@ def train(resolution=128,
           use_leaky_relu=True,  # True = use LeakyReLU, False = use ReLU.
           num_channels=3,
           mbstd_group_size=4,
-          learning_rate=0.001
+          learning_rate=0.001,
           learning_rate_decay=0.8,
           gradient_weight=10.0,
           D_repeat=1,
@@ -498,6 +490,8 @@ def train(resolution=128,
           save_every_n_batches=1000):
   """Training loop for training the GAN up to the provided resolution."""
   resolution_log2 = int(np.log2(resolution))
+  if latent_size is None:
+    latent_size = min(fmap_base, fmap_max)
 
   G_model, G_lod_in = G(resolution=resolution,
                         fmap_base=fmap_base,
@@ -532,8 +526,10 @@ def train(resolution=128,
     if debug_mode:
       print(*args)
 
+  X_train = data.training_data(train_data_path, resolution, batch_size)
+
   export_path = os.path.join(
-      output_path, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+      checkpoint_path, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
   for res_log2 in range(2, resolution_log2 + 1):
     cur_resolution = 1 << res_log2
@@ -549,8 +545,6 @@ def train(resolution=128,
 
     img_count = 0
     n_batches = (total_kimg * 1000) // batch_size
-
-    X_train = data.training_data(train_data_path, cur_resolution, batch_size)
 
     lod = resolution_log2 - res_log2
 

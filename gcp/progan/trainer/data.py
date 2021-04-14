@@ -1,3 +1,4 @@
+import os
 import tensorflow as tf
 from tensorflow.python.platform import gfile
 
@@ -24,7 +25,7 @@ def load_image_dataset(image_dir, image_size, batch_size):
 def data_generator(image_dir, image_size, image_cache, filelist):
   """Generator for loading image data."""
   if not filelist:
-    filelist.extend([fname for gfile.ListDirectory(image_dir)])
+    filelist.extend([x for x in gfile.ListDirectory(image_dir)])
   for fname in filelist:
     if fname in image_cache:
         yield image_cache[fname]
