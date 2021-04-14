@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import tensorflow as tf
 import tensorflow.keras.backend as K
 
@@ -467,7 +468,10 @@ def compute_lod_in(lod, cur_img, transition_kimg):
 
 def save_model(output_path, gan):
   """Save the model parameters to GCS."""
-  pass
+  export_path = os.path.join(
+      output_path, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+  gan.G.save(os.path.join(export_path, 'gen/'))
+  gan.D.save(os.path.join(export_path, 'disc/'))
 
 
 def train(resolution=128,
