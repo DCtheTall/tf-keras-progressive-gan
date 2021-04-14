@@ -2,6 +2,8 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.keras.backend as K
 
+from trainer import data
+
 
 def n_filters(stage, fmap_base, fmap_max, fmap_decay):
   """Get the number of filters in a convolutional layer."""
@@ -334,12 +336,12 @@ class WGANGP:
                resolution,
                G,
                D,
-               init_G_optimizer,
-               init_D_optimizer,
+               G_lod_in,
+               D_lod_in,
                batch_size,
                latent_size,
-               G_lod_in=None,
-               D_lod_in=None,
+               learning_rate=0.001,
+               learning_rate_decay=0.8,
                gradient_weight=10.0,
                D_repeat=1,
                *args, **kwargs):
@@ -347,17 +349,29 @@ class WGANGP:
     self.resolution = resolution
     self.G = G
     self.D = D
+    self.G_lod_in = G_lod_in
+    self.D_lod_in = D_lod_in
     self.batch_size = batch_size
     self.latent_size = latent_size
+    self.learning_rate = learning_rate
+    self.learning_rate_decay = learning_rate_decay
     self.gradient_weight = gradient_weight
+    self.D_repeat = D_repeat
 
-    self.init_G_optimizer = init_G_optimizer
-    self.init_D_optimizer = init_D_optimizer
+    self.G_optimizer = None
+    self.D_optimizer = None
 
     self.G_lod_in = G_lod_in
     self.D_lod_in = D_lod_in
 
-    self.D_repeat = D_repeat
+  def init_optimizers(self, resolution):
+    """Initialize the optimizers for the models"""
+    res_log2 = int(np.log2(resolution))
+    lr = self.learning_rate * (self.learning_rate_decay ** (res_log2 - 2))
+    self.G_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
+                                                epsilon=1e-8)
+    self.D_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
+                                                epsilon=1e-8)
 
   def compute_D_loss(self, real_imgs):
     """Compute discriminator loss terms."""
@@ -431,11 +445,11 @@ class WGANGP:
 
     return tape.gradient(G_loss, self.G.trainable_variables)
 
-  def train_on_batch(self, X_batch, alpha=None, print_loss=False):
+  def train_on_batch(self, X_batch, lod_in=None, print_loss=False):
     """Train on a single batch of data."""
-    if alpha is not None:
-      K.set_value(self.G_alpha, alpha)
-      K.set_value(self.D_alpha, alpha)
+    if lod_in is not None:
+      K.set_value(self.G_lod_in, lod_in)
+      K.set_value(self.D_lod_in, lod_in)
 
     for _ in range(self.D_repeat):
       D_grads = self.compute_D_gradients(X_batch, print_loss)
@@ -443,3 +457,114 @@ class WGANGP:
     
     G_grads = self.compute_G_gradients(print_loss)
     self.G_optimizer.apply_gradients(zip(G_grads, self.G.trainable_variables))
+
+
+def compute_lod_in(lod, cur_img, transition_kimg):
+  """Compute value for lod_in, the variable that controls fading in new layers."""
+  return min(
+      lod + 1.0,
+      max(lod, lod + 1.0 - (float(cur_img) / (transition_kimg * 1000))))
+
+
+def save_model(output_path, gan):
+  """Save the model parameters to GCS."""
+  pass
+
+
+def train_model(resolution=128,
+                batch_size=64,
+                latent_size=None,
+                fmap_base=8192,
+                fmap_max=512,  # Max filters in each conv layer.
+                fmap_decay=1.0,
+                normalize_latents=True,  # Pixelwise normalize latent vector.
+                use_wscale=True,  # Scale the weights with He init at runtime.
+                use_pixel_norm=True,  # Use pixelwise normalization.
+                use_leaky_relu=True,  # True = use LeakyReLU, False = use ReLU.
+                num_channels=3,
+                mbstd_group_size=4,
+                learning_rate=0.001
+                learning_rate_decay=0.8,
+                gradient_weight=10.0,
+                D_repeat=1,
+                kimage_4x4=1000,
+                kimage=2000,
+                kimage_large=4000,
+                train_data_path=None,
+                debug_mode=False,
+                print_every_n_batches=25,
+                save_every_n_batches=1000,
+                output_path=None):
+  """Training loop for training the GAN up to the provided resolution."""
+  resolution_log2 = int(np.log2(resolution))
+
+  G_model, G_lod_in = G(resolution=resolution,
+                        fmap_base=fmap_base,
+                        fmap_decay=fmap_decay,
+                        fmap_max=fmap_max,
+                        normalize_latents=normalize_latents,
+                        use_wscale=use_wscale,
+                        use_pixel_norm=use_pixel_norm,
+                        use_leaky_relu=use_leaky_relu,
+                        num_channels=num_channels)
+  D_model, D_lod_in = D(resolution=resolution,
+                        num_channels=num_channels,
+                        fmap_base=fmap_base,
+                        fmap_decay=fmap_decay,
+                        fmap_max=fmap_max,
+                        use_wscale=use_wscale,
+                        mbstd_group_size=mbstd_group_size)
+
+  gan = WGANGP(resolution,
+               G_model,
+               D_model,
+               G_lod_in,
+               D_lod_in,
+               batch_size=batch_size,
+               latent_size=latent_size,
+               learning_rate=learning_rate,
+               learning_rate_decay=learning_rate_decay,
+               gradient_weight=gradient_weight,
+               D_repeat=D_repeat)
+
+  def debug_log(*args):
+    if debug_mode:
+      print(*args)
+
+  for res_log2 in range(2, resolution_log2 + 1):
+    cur_resolution = 1 << res_log2
+    gan.init_optimizers(cur_resolution)
+
+    if res_log2 == 2:
+      total_kimg = kimage_4x4
+    elif res_log2 >= 7:
+      total_kimg = kimage_large
+    else:
+      total_kimg = kimage
+    transition_kimg = total_kimg // 4
+
+    img_count = 0
+    n_batches = (total_kimg * 1000) // batch_size
+
+    X_train = data.training_data(train_data_path, cur_resolution, batch_size)
+
+    lod = resolution_log2 - res_log2
+
+    for i in range(1, n_batches + 1):
+      img_count += batch_size
+      if res_log2 > 2:
+        lod_in_batch = compute_lod_in(lod, img_count, transition_kimg)
+      else:
+        lod_in_batch = None
+      
+      X_batch = next(X_train)
+      if (i % print_every_n_batches) == 0:
+        debug_log('Batch: {} / {}'.format(i, n_batches))
+        if lod_in_batch is not None:
+          debug_log('LoD in: {}'.format(lod_in_batch))
+
+      gan.train_on_batch(X_batch, lod_in=lod_in_batch, print_loss=debug_mode)
+      if i % save_every_n_batches == 0:
+        debug_log('Saving weights...')
+        save_model(output_path, gan)
+        debug_log('Done.')
