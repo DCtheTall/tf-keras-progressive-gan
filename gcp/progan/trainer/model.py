@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.keras.backend as K
 
-from trainer import data
+from progam.trainer import data
 
 
 def n_filters(stage, fmap_base, fmap_max, fmap_decay):
@@ -461,9 +461,8 @@ class WGANGP:
 
 def compute_lod_in(lod, cur_img, transition_kimg):
   """Compute value for lod_in, the variable that controls fading in new layers."""
-  return min(
-      lod + 1.0,
-      max(lod, lod + 1.0 - (float(cur_img) / (transition_kimg * 1000))))
+  return lod + min(
+      1.0, max(0.0, 1.0 - (float(cur_img) / (transition_kimg * 1000))))
 
 
 def save_model(output_path, gan):
@@ -471,30 +470,30 @@ def save_model(output_path, gan):
   pass
 
 
-def train_model(resolution=128,
-                batch_size=64,
-                latent_size=None,
-                fmap_base=8192,
-                fmap_max=512,  # Max filters in each conv layer.
-                fmap_decay=1.0,
-                normalize_latents=True,  # Pixelwise normalize latent vector.
-                use_wscale=True,  # Scale the weights with He init at runtime.
-                use_pixel_norm=True,  # Use pixelwise normalization.
-                use_leaky_relu=True,  # True = use LeakyReLU, False = use ReLU.
-                num_channels=3,
-                mbstd_group_size=4,
-                learning_rate=0.001
-                learning_rate_decay=0.8,
-                gradient_weight=10.0,
-                D_repeat=1,
-                kimage_4x4=1000,
-                kimage=2000,
-                kimage_large=4000,
-                train_data_path=None,
-                debug_mode=False,
-                print_every_n_batches=25,
-                save_every_n_batches=1000,
-                output_path=None):
+def train(resolution=128,
+          batch_size=64,
+          latent_size=None,
+          fmap_base=8192,
+          fmap_max=512,  # Max filters in each conv layer.
+          fmap_decay=1.0,
+          normalize_latents=True,  # Pixelwise normalize latent vector.
+          use_wscale=True,  # Scale the weights with He init at runtime.
+          use_pixel_norm=True,  # Use pixelwise normalization.
+          use_leaky_relu=True,  # True = use LeakyReLU, False = use ReLU.
+          num_channels=3,
+          mbstd_group_size=4,
+          learning_rate=0.001
+          learning_rate_decay=0.8,
+          gradient_weight=10.0,
+          D_repeat=1,
+          kimage_4x4=1000,
+          kimage=2000,
+          kimage_large=4000,
+          train_data_path=None,
+          checkpoint_path=None,
+          debug_mode=False,
+          print_every_n_batches=25,
+          save_every_n_batches=1000):
   """Training loop for training the GAN up to the provided resolution."""
   resolution_log2 = int(np.log2(resolution))
 
@@ -566,5 +565,5 @@ def train_model(resolution=128,
       gan.train_on_batch(X_batch, lod_in=lod_in_batch, print_loss=debug_mode)
       if i % save_every_n_batches == 0:
         debug_log('Saving weights...')
-        save_model(output_path, gan)
+        save_model(checkpoint_path, gan)
         debug_log('Done.')

@@ -4,11 +4,16 @@ from tensorflow.python.platform import gfile
 
 # Cache images in memory so we don't have to load them from GCS each time.
 image_cache = {}
+# Cache filenames in the directory too since getting all of them is also a
+# bit time consuming.
+filelist = []
 
 
 def load_image_dataset(image_dir, image_size, batch_size):
   """Load the images into a dataset from the given path."""
-  data_gen = lambda: data_generator(image_dir, image_size)
+  def data_gen():
+    return data_generator(
+        image_dir, image_size, image_cache, filelist)
   ds = tf.data.Dataset.from_generator(
       data_gen, output_signature=tf.TensorSpec(
           shape=(image_size, image_size, 3), dtype=tf.float32))
@@ -16,9 +21,11 @@ def load_image_dataset(image_dir, image_size, batch_size):
   return ds.batch(batch_size).map(augment_and_scale).repeat()
 
 
-def data_generator(image_dir, image_size):
+def data_generator(image_dir, image_size, image_cache, filelist):
   """Generator for loading image data."""
-  for fname in gfile.ListDirectory(image_dir):
+  if not filelist:
+    filelist.extend([fname for gfile.ListDirectory(image_dir)])
+  for fname in filelist:
     if fname in image_cache:
         yield image_cache[fname]
         continue
