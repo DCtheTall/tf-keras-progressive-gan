@@ -4,7 +4,7 @@ import os
 import tensorflow as tf
 import tensorflow.keras.backend as K
 
-from progan.trainer import data
+from trainer import data
 
 
 def n_filters(stage, fmap_base, fmap_max, fmap_decay):
@@ -562,7 +562,8 @@ def train(resolution=128,
           debug_log('LoD in: {}'.format(lod_in_batch))
 
       gan.train_on_batch(X_batch, lod_in=lod_in_batch, print_loss=debug_mode)
-      if i % save_every_n_batches == 0:
+      
+      if (i % save_every_n_batches) == 0:
         debug_log('Saving weights...')
         save_model(export_path, gan)
         debug_log('Done.')

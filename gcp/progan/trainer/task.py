@@ -3,7 +3,7 @@ import json
 import os
 import tensorflow as tf
 
-from progan.trainer import model
+from trainer import model
 
 
 if __name__ == '__main__':
@@ -104,15 +104,15 @@ if __name__ == '__main__':
   parser.add_argument('--debug_mode',
                       help='Toggles debug logging',
                       type=bool,
-                      default=True)
+                      default=False)
   parser.add_argument('--print_every_n_batches',
                       help='Logs progress every N training batches',
                       type=int,
-                      default=25)
+                      default=100)
   parser.add_argument('--save_every_n_batches',
                       help='Logs progress every N training batches',
                       type=int,
-                      default=25)
+                      default=1000)
 
   args = parser.parse_args()
   arguments = args.__dict__

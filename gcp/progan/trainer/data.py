@@ -16,8 +16,9 @@ def load_image_dataset(image_dir, image_size, batch_size):
     return data_generator(
         image_dir, image_size, image_cache, filelist)
   ds = tf.data.Dataset.from_generator(
-      data_gen, output_signature=tf.TensorSpec(
-          shape=(image_size, image_size, 3), dtype=tf.float32))
+      data_gen,
+      output_shapes=tf.TensorShape([image_size, image_size, 3]),
+      output_types=tf.uint8)
   ds = ds.shuffle(batch_size, reshuffle_each_iteration=True)
   return ds.batch(batch_size).map(augment_and_scale).repeat()
 
