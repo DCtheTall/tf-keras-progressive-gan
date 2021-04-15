@@ -561,9 +561,10 @@ def train(resolution=128,
         if lod_in_batch is not None:
           debug_log('LoD in: {}'.format(lod_in_batch))
 
-      gan.train_on_batch(X_batch, lod_in=lod_in_batch, print_loss=debug_mode)
+      print_loss = debug_mode and (i % print_every_n_batches) == 0
+      gan.train_on_batch(X_batch, lod_in=lod_in_batch, print_loss=print_loss)
       
-      if (i % save_every_n_batches) == 0:
+      if (i % save_every_n_batches) == 0 or i == n_batches:
         debug_log('Saving weights...')
         save_model(export_path, gan)
         debug_log('Done.')
