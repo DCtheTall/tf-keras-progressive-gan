@@ -30,7 +30,7 @@ def load_image_dataset(bucket_name, data_filename, image_size, batch_size):
       label_mode=None,
       batch_size=batch_size,
       interpolation='nearest',
-      image_size=(image_size, image_size)).map(lambda x: augment(x, image_size))
+      image_size=(image_size, image_size))
   return ds.map(augment_and_scale).repeat()
 
 
