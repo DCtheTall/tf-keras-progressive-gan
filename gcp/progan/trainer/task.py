@@ -10,7 +10,7 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser()
 
   # Required arguments
-  parser.add_argument('--train_data_path',
+  parser.add_argument('--data_bucket_name',
                       help='GCS location of the training images',
                       required=True)
   parser.add_argument('--checkpoint_path',
@@ -101,6 +101,10 @@ if __name__ == '__main__':
                       help='Number of training images for resolutions >= 128',
                       type=int,
                       default=4000)
+  parser.add_argument('--data_filename',
+                      help='Name of the .zip file with the data in GCP',
+                      type=str,
+                      default='celeba.zip')
   parser.add_argument('--debug_mode',
                       help='Toggles debug logging',
                       type=bool,
@@ -120,4 +124,3 @@ if __name__ == '__main__':
   arguments.pop("job-dir", None)
 
   model.train(**arguments)
-

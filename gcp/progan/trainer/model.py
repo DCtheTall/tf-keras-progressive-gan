@@ -483,7 +483,8 @@ def train(resolution=128,
           kimage_4x4=1000,
           kimage=2000,
           kimage_large=4000,
-          train_data_path=None,
+          data_bucket_name=None,
+          data_filename=None,
           checkpoint_path=None,
           debug_mode=False,
           print_every_n_batches=25,
@@ -526,7 +527,10 @@ def train(resolution=128,
     if debug_mode:
       print(*args)
 
-  X_train = data.training_data(train_data_path, resolution, batch_size)
+  X_train = data.training_data(data_bucket_name,
+                               data_filename,
+                               resolution,
+                               batch_size)
 
   export_path = os.path.join(
       checkpoint_path, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
