@@ -1,4 +1,5 @@
 import datetime
+import logging
 import numpy as np
 import os
 import tensorflow as tf
@@ -423,7 +424,7 @@ class WGANGP:
       D_loss = D_loss_real + D_loss_fake + D_loss_gp
 
     if print_loss:
-      print('D Loss: R: {:04f} F: {:04f} GP: {:04f}'.format(
+      logging.info('D Loss: R: {:04f} F: {:04f} GP: {:04f}'.format(
           D_loss_real, D_loss_fake, D_loss_gp))
     
     return tape.gradient(D_loss, self.D.trainable_variables)
@@ -434,7 +435,7 @@ class WGANGP:
       G_loss = self.compute_G_loss()
 
     if print_loss:
-      print('G Loss: {:04f}'.format(G_loss))
+      logging.info('G Loss: {:04f}'.format(G_loss))
 
     return tape.gradient(G_loss, self.G.trainable_variables)
 
@@ -525,18 +526,23 @@ def train(resolution=128,
 
   def debug_log(*args):
     if debug_mode:
-      print(*args)
+      logging.info(*args)
+  debug_log('Debug mode enabled!')
 
+  debug_log('Loading dataset...')
   X_train = data.training_data(data_bucket_name,
                                data_filename,
                                resolution,
                                batch_size)
+  debug_log('Data loaded successfully!')
 
   export_path = os.path.join(
       checkpoint_path, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
   for res_log2 in range(2, resolution_log2 + 1):
     cur_resolution = 1 << res_log2
+    debug_log('Training resolution: {}'.format(cur_resolution))
+    
     gan.init_optimizers(cur_resolution)
 
     if res_log2 == 2:
