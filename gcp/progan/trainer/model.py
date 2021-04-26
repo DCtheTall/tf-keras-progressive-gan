@@ -441,9 +441,8 @@ class WGANGP:
 
   def train_on_batch(self, X_batch, lod_in=None, print_loss=False):
     """Train on a single batch of data."""
-    if lod_in is not None:
-      K.set_value(self.G_lod_in, lod_in)
-      K.set_value(self.D_lod_in, lod_in)
+    K.set_value(self.G_lod_in, lod_in)
+    K.set_value(self.D_lod_in, lod_in)
 
     for _ in range(self.D_repeat):
       D_grads = self.compute_D_gradients(X_batch, print_loss)
@@ -452,17 +451,16 @@ class WGANGP:
     G_grads = self.compute_G_gradients(print_loss)
     self.G_optimizer.apply_gradients(zip(G_grads, self.G.trainable_variables))
 
+  def save_model(self, export_path):
+  """Save the model parameters to GCS."""
+    self.G.save(os.path.join(export_path, 'gen/'))
+    self.D.save(os.path.join(export_path, 'disc/'))
+
 
 def compute_lod_in(lod, cur_img, transition_kimg):
   """Compute value for lod_in, the variable that controls fading in new layers."""
   return lod + min(
       1.0, max(0.0, 1.0 - (float(cur_img) / (transition_kimg * 1000))))
-
-
-def save_model(export_path, gan):
-  """Save the model parameters to GCS."""
-  gan.G.save(os.path.join(export_path, 'gen/'))
-  gan.D.save(os.path.join(export_path, 'disc/'))
 
 
 def train(resolution=128,
@@ -563,18 +561,17 @@ def train(resolution=128,
       if res_log2 > 2:
         lod_in_batch = compute_lod_in(lod, img_count, transition_kimg)
       else:
-        lod_in_batch = None
+        lod_in_batch = lod
       
       X_batch = next(X_train)
       if (i % print_every_n_batches) == 0:
         debug_log('Batch: {} / {}'.format(i, n_batches))
-        if lod_in_batch is not None:
-          debug_log('LoD in: {}'.format(lod_in_batch))
+        debug_log('LoD in: {}'.format(lod_in_batch))
 
       print_loss = debug_mode and (i % print_every_n_batches) == 0
       gan.train_on_batch(X_batch, lod_in=lod_in_batch, print_loss=print_loss)
       
       if (i % save_every_n_batches) == 0 or i == n_batches:
         debug_log('Saving weights...')
-        save_model(export_path, gan)
+        gan.save_model(export_path)
         debug_log('Done.')
