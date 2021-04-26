@@ -452,7 +452,7 @@ class WGANGP:
     self.G_optimizer.apply_gradients(zip(G_grads, self.G.trainable_variables))
 
   def save_model(self, export_path):
-  """Save the model parameters to GCS."""
+    """Save the model parameters to GCS."""
     self.G.save(os.path.join(export_path, 'gen/'))
     self.D.save(os.path.join(export_path, 'disc/'))
 
