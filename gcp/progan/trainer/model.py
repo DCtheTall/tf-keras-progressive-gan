@@ -380,8 +380,6 @@ class WGANGP:
 
   def compute_D_loss(self, real_imgs):
     """Compute discriminator loss terms."""
-
-    # Generate the image at lower resolution for layer fading.
     latents_in = np.random.normal(size=(self.batch_size, self.latent_size))
     fake_imgs = self.G(latents_in)
     interp_imgs = self.interpolate_imgs(real_imgs, fake_imgs)
