@@ -25,13 +25,12 @@ def load_image_dataset(bucket_name, data_filename, image_size, batch_size):
       os.mkdir(DATA_DIR)
       zf.extractall(DATA_DIR)
 
-  ds = tf.keras.preprocessing.image_dataset_from_directory(
+  return tf.keras.preprocessing.image_dataset_from_directory(
       DATA_DIR,
       label_mode=None,
       batch_size=batch_size,
       interpolation='nearest',
-      image_size=(image_size, image_size))
-  return ds.map(augment_and_scale).repeat()
+      image_size=(image_size, image_size)).repeat().map(augment_and_scale)
 
 
 def augment_and_scale(x):
