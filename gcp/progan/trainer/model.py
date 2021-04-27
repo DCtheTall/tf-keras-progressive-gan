@@ -533,7 +533,9 @@ def train(resolution=128,
   debug_log('Data loaded successfully!')
 
   export_path = os.path.join(
-      checkpoint_path, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+      checkpoint_path,
+      '{}x{}'.format(*([resolution] * 2)),
+      datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
   for res_log2 in range(2, resolution_log2 + 1):
     cur_resolution = 1 << res_log2
