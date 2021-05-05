@@ -337,6 +337,7 @@ class WGANGP:
 
   def __init__(self,
                resolution,
+               strategy,
                G,
                D,
                G_lod_in,
@@ -350,6 +351,7 @@ class WGANGP:
                *args, **kwargs):
     super(WGANGP, self).__init__(*args, **kwargs)
     self.resolution = resolution
+    self.strategy = strategy
     self.G = G
     self.D = D
     self.G_lod_in = G_lod_in
@@ -370,12 +372,13 @@ class WGANGP:
 
   def init_optimizers(self, resolution):
     """Initialize the optimizers for the models"""
-    self.cur_resolution = resolution
-    res_log2 = int(np.log2(resolution))
-    lr = self.learning_rate * (self.learning_rate_decay ** (res_log2 - 2))
-    self.G_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
-                                                epsilon=1e-8)
-    self.D_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
+    with self.strategy.scope():
+      self.cur_resolution = resolution
+      res_log2 = int(np.log2(resolution))
+      lr = self.learning_rate * (self.learning_rate_decay ** (res_log2 - 2))
+      self.G_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
+                                                  epsilon=1e-8)
+      self.D_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
                                                 epsilon=1e-8)
 
   def compute_D_loss(self, real_imgs):
@@ -455,6 +458,12 @@ class WGANGP:
     self.D.save(os.path.join(export_path, 'disc/'))
 
 
+@tf.function
+def distributed_train_on_batch(gan, X_batch, lod_in=None, print_loss=False):
+  """Distributed training function for training on multiple devices."""
+  gan.strategy.run(gan.train_on_batch, args=(X_batch, lod_in, print_loss))
+
+
 def compute_lod_in(lod, cur_img, transition_kimg):
   """Compute value for lod_in, the variable that controls fading in new layers."""
   return lod + min(
@@ -491,34 +500,39 @@ def train(resolution=128,
   if latent_size is None:
     latent_size = min(fmap_base, fmap_max)
 
-  G_model, G_lod_in = G(resolution=resolution,
-                        fmap_base=fmap_base,
-                        fmap_decay=fmap_decay,
-                        fmap_max=fmap_max,
-                        normalize_latents=normalize_latents,
-                        use_wscale=use_wscale,
-                        use_pixel_norm=use_pixel_norm,
-                        use_leaky_relu=use_leaky_relu,
-                        num_channels=num_channels)
-  D_model, D_lod_in = D(resolution=resolution,
-                        num_channels=num_channels,
-                        fmap_base=fmap_base,
-                        fmap_decay=fmap_decay,
-                        fmap_max=fmap_max,
-                        use_wscale=use_wscale,
-                        mbstd_group_size=mbstd_group_size)
+  strategy = tf.distribute.MirroredStrategy()
+  print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
 
-  gan = WGANGP(resolution,
-               G_model,
-               D_model,
-               G_lod_in,
-               D_lod_in,
-               batch_size=batch_size,
-               latent_size=latent_size,
-               learning_rate=learning_rate,
-               learning_rate_decay=learning_rate_decay,
-               gradient_weight=gradient_weight,
-               D_repeat=D_repeat)
+  with strategy.scope():
+    G_model, G_lod_in = G(resolution=resolution,
+                          fmap_base=fmap_base,
+                          fmap_decay=fmap_decay,
+                          fmap_max=fmap_max,
+                          normalize_latents=normalize_latents,
+                          use_wscale=use_wscale,
+                          use_pixel_norm=use_pixel_norm,
+                          use_leaky_relu=use_leaky_relu,
+                          num_channels=num_channels)
+    D_model, D_lod_in = D(resolution=resolution,
+                          num_channels=num_channels,
+                          fmap_base=fmap_base,
+                          fmap_decay=fmap_decay,
+                          fmap_max=fmap_max,
+                          use_wscale=use_wscale,
+                          mbstd_group_size=mbstd_group_size)
+
+    gan = WGANGP(resolution,
+                 strategy,
+                 G_model,
+                 D_model,
+                 G_lod_in,
+                 D_lod_in,
+                 batch_size=batch_size,
+                 latent_size=latent_size,
+                 learning_rate=learning_rate,
+                 learning_rate_decay=learning_rate_decay,
+                 gradient_weight=gradient_weight,
+                 D_repeat=D_repeat)
 
   def debug_log(*args):
     if debug_mode:
@@ -569,7 +583,7 @@ def train(resolution=128,
         debug_log('LoD in: {}'.format(lod_in_batch))
 
       print_loss = debug_mode and (i % print_every_n_batches) == 0
-      gan.train_on_batch(X_batch, lod_in=lod_in_batch, print_loss=print_loss)
+      distributed_train_on_batch(gan, X_batch, lod_in=lod_in_batch, print_loss=print_loss)
       
       if (i % save_every_n_batches) == 0 or i == n_batches:
         debug_log('Saving weights...')
