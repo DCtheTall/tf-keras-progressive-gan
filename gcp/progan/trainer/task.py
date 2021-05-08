@@ -105,10 +105,6 @@ if __name__ == '__main__':
                       help='Name of the .zip file with the data in GCP',
                       type=str,
                       default='celeba.zip')
-  parser.add_argument('--debug_mode',
-                      help='Toggles debug logging',
-                      type=bool,
-                      default=True)
   parser.add_argument('--print_every_n_batches',
                       help='Logs progress every N training batches',
                       type=int,
