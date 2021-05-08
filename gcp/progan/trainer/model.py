@@ -322,152 +322,16 @@ def D(num_channels=3,  # Number of channels images have.
   return model, lod_in
 
 
-class WGANGP:
-  """
-  This class contains a method for training the adversarial model by batch.
-
-  It implements the training objective for the GAN for a particular resolution.
-  When one resolution completes training, the optimizers are overwritten with new
-  ones with the same parameters, and training begins at the next resolution.
-
-  In order to properly implement gradient penalty loss in TensorFlow 2.x, we
-  need to use a custom Keras model for this training objective.
-
-  """
-
-  def __init__(self,
-               resolution,
-               strategy,
-               G,
-               D,
-               G_lod_in,
-               D_lod_in,
-               batch_size,
-               latent_size,
-               learning_rate=0.001,
-               learning_rate_decay=0.8,
-               gradient_weight=10.0,
-               D_repeat=1,
-               *args, **kwargs):
-    super(WGANGP, self).__init__(*args, **kwargs)
-    self.resolution = resolution
-    self.strategy = strategy
-    self.G = G
-    self.D = D
-    self.G_lod_in = G_lod_in
-    self.D_lod_in = D_lod_in
-    self.batch_size = batch_size
-    self.latent_size = latent_size
-    self.learning_rate = learning_rate
-    self.learning_rate_decay = learning_rate_decay
-    self.gradient_weight = gradient_weight
-    self.D_repeat = D_repeat
-
-    self.cur_resolution = None
-    self.G_optimizer = None
-    self.D_optimizer = None
-
-    self.G_lod_in = G_lod_in
-    self.D_lod_in = D_lod_in
-
-  def init_optimizers(self, resolution):
-    """Initialize the optimizers for the models"""
-    with self.strategy.scope():
-      self.cur_resolution = resolution
-      res_log2 = int(np.log2(resolution))
-      lr = self.learning_rate * (self.learning_rate_decay ** (res_log2 - 2))
-      self.G_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
-                                                  epsilon=1e-8)
-      self.D_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
-                                                epsilon=1e-8)
-
-  def compute_D_loss(self, real_imgs):
-    """Compute discriminator loss terms."""
-    latents_in = np.random.normal(size=(self.batch_size, self.latent_size))
-    fake_imgs = self.G(latents_in)
-    interp_imgs = self.interpolate_imgs(real_imgs, fake_imgs)
-    
-    real_pred = self.D(real_imgs)
-    fake_pred = self.D(fake_imgs)
-
-    real_loss = tf.reduce_mean(real_pred)
-    fake_loss = -tf.reduce_mean(fake_pred)
-    gp_loss = self.gradient_penalty(interp_imgs)
-
-    return real_loss, fake_loss, gp_loss
-
-  def interpolate_imgs(self, real_img, fake_img):
-    """Interpolate real and fake images for GP loss calculation."""
-    w = tf.random.uniform([self.batch_size, 1, 1, 1], 0.0, 1.0)
-    return (w * real_img) + ((1.0 - w) * fake_img)
-
-  def gradient_penalty(self, interp_imgs):
-    """Compute gradient penalty loss."""
-    with tf.GradientTape() as tape:
-      tape.watch(interp_imgs)
-      interp_pred = self.D(interp_imgs)
-    grads = tape.gradient(interp_pred, interp_imgs)[0]
-    ddx = K.sqrt(K.sum(tf.square(grads), axis=np.arange(1, len(grads.shape))))
-    loss = tf.reduce_mean(tf.square(1.0 - ddx))
-    return self.gradient_weight * loss
-
-  def compute_G_loss(self):
-    """Compute G loss."""
-    latents_in = np.random.normal(size=(self.batch_size, self.latent_size))
-    fake_imgs = self.G(latents_in)
-    fake_pred = self.D(fake_imgs)
-    return tf.reduce_mean(fake_pred)
-
-  def compute_D_gradients(self, real_imgs, print_loss=False):
-    """Compute the discriminator loss gradients."""
-    with tf.GradientTape() as tape:
-      D_loss_real, D_loss_fake, D_loss_gp = self.compute_D_loss(real_imgs)
-      D_loss = D_loss_real + D_loss_fake + D_loss_gp
-
-    if print_loss:
-      logging.info('D Loss: R: {:04f} F: {:04f} GP: {:04f}'.format(
-          D_loss_real, D_loss_fake, D_loss_gp))
-    
-    return tape.gradient(D_loss, self.D.trainable_variables)
-
-  def compute_G_gradients(self, print_loss=False):
-    """Compute the generator loss gradients."""
-    with tf.GradientTape() as tape:
-      G_loss = self.compute_G_loss()
-
-    if print_loss:
-      logging.info('G Loss: {:04f}'.format(G_loss))
-
-    return tape.gradient(G_loss, self.G.trainable_variables)
-
-  def train_on_batch(self, X_batch, lod_in=None, print_loss=False):
-    """Train on a single batch of data."""
-    K.set_value(self.G_lod_in, lod_in)
-    K.set_value(self.D_lod_in, lod_in)
-
-    for _ in range(self.D_repeat):
-      D_grads = self.compute_D_gradients(X_batch, print_loss)
-      self.D_optimizer.apply_gradients(zip(D_grads, self.D.trainable_variables))
-    
-    G_grads = self.compute_G_gradients(print_loss)
-    self.G_optimizer.apply_gradients(zip(G_grads, self.G.trainable_variables))
-
-  def save_model(self, export_path):
-    """Save the model parameters to GCS."""
-    self.G.save(os.path.join(export_path, 'gen/'))
-    self.D.save(os.path.join(export_path, 'disc/'))
-
-
-@tf.function
-def distributed_train_on_batch(gan, X_batch, lod_in=None, print_loss=False):
-  """Distributed training function for training on multiple devices."""
-  gan.strategy.run(gan.train_on_batch, args=(X_batch, lod_in, print_loss))
-
-
 def compute_lod_in(lod, cur_img, transition_kimg):
   """Compute value for lod_in, the variable that controls fading in new layers."""
   return lod + min(
       1.0, max(0.0, 1.0 - (float(cur_img) / (transition_kimg * 1000))))
+
+
+def save_model(G, D, export_path):
+  """Save the model parameters to GCS."""
+  G.save(os.path.join(export_path, 'gen/'))
+  D.save(os.path.join(export_path, 'disc/'))
 
 
 def train(resolution=128,
@@ -492,7 +356,6 @@ def train(resolution=128,
           data_bucket_name=None,
           data_filename=None,
           checkpoint_path=None,
-          debug_mode=False,
           print_every_n_batches=25,
           save_every_n_batches=1000):
   """Training loop for training the GAN up to the provided resolution."""
@@ -501,7 +364,7 @@ def train(resolution=128,
     latent_size = min(fmap_base, fmap_max)
 
   strategy = tf.distribute.MirroredStrategy()
-  print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
+  logging.info('Number of devices: {}'.format(strategy.num_replicas_in_sync))
 
   with strategy.scope():
     G_model, G_lod_in = G(resolution=resolution,
@@ -521,30 +384,116 @@ def train(resolution=128,
                           use_wscale=use_wscale,
                           mbstd_group_size=mbstd_group_size)
 
-    gan = WGANGP(resolution,
-                 strategy,
-                 G_model,
-                 D_model,
-                 G_lod_in,
-                 D_lod_in,
-                 batch_size=batch_size,
-                 latent_size=latent_size,
-                 learning_rate=learning_rate,
-                 learning_rate_decay=learning_rate_decay,
-                 gradient_weight=gradient_weight,
-                 D_repeat=D_repeat)
+  def init_optimizers(resolution):
+    """Initialize the optimizers for the given resolution."""
+    with strategy.scope():
+      res_log2 = int(np.log2(resolution))
+      lr = learning_rate * (learning_rate_decay ** (res_log2 - 2))
+      G_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
+                                             epsilon=1e-8)
+      D_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
+                                             epsilon=1e-8)
+    return G_optimizer, D_optimizer
 
-  def debug_log(*args):
-    if debug_mode:
-      logging.info(*args)
-  debug_log('Debug mode enabled!')
+  # Training loop def start.
 
-  debug_log('Loading dataset...')
+  def compute_D_loss(real_imgs):
+    """Compute discriminator loss terms."""
+    with strategy.scope():
+      latents_in = np.random.normal(size=(batch_size, latent_size))
+      fake_imgs = G_model(latents_in)
+      interp_imgs = interpolate_imgs(real_imgs, fake_imgs)
+      
+      real_pred = D_model(real_imgs)
+      fake_pred = D_model(fake_imgs)
+
+      real_loss = tf.reduce_mean(real_pred)
+      fake_loss = -tf.reduce_mean(fake_pred)
+      gp_loss = gradient_penalty(interp_imgs)
+
+    return real_loss, fake_loss, gp_loss
+
+  def interpolate_imgs(real_img, fake_img):
+    """Interpolate real and fake images for GP loss calculation."""
+    w = tf.random.uniform([batch_size, 1, 1, 1], 0.0, 1.0)
+    return (w * real_img) + ((1.0 - w) * fake_img)
+
+  def gradient_penalty(interp_imgs):
+    """Compute gradient penalty loss."""
+    with tf.GradientTape() as tape:
+      tape.watch(interp_imgs)
+      interp_pred = D_model(interp_imgs)
+    grads = tape.gradient(interp_pred, interp_imgs)[0]
+    ddx = K.sqrt(K.sum(tf.square(grads), axis=np.arange(1, len(grads.shape))))
+    loss = tf.reduce_mean(tf.square(1.0 - ddx))
+    return gradient_weight * loss
+
+  def compute_G_loss():
+    """Compute generator loss."""
+    with strategy.scope():
+      latents_in = np.random.normal(size=(batch_size, latent_size))
+      fake_imgs = G_model(latents_in)
+      fake_pred = D_model(fake_imgs)
+    return tf.reduce_mean(fake_pred)
+
+  def compute_D_gradients(real_imgs, print_loss=False):
+    """Compute the discriminator loss gradients."""
+    with tf.GradientTape() as tape:
+      D_loss_real, D_loss_fake, D_loss_gp = compute_D_loss(real_imgs)
+      D_loss = D_loss_real + D_loss_fake + D_loss_gp
+    log_D_loss(D_loss_real, D_loss_fake, D_loss_gp, print_loss)
+    return tape.gradient(D_loss, D_model.trainable_variables)
+
+  def log_D_loss(D_loss_real, D_loss_fake, D_loss_gp,
+                 print_loss=False):
+    """Log the discriminator loss"""
+    if not print_loss:
+      return
+    losses = [strategy.reduce(tf.distribute.ReduceOp.SUM, loss, axis=None)
+              for loss in [D_loss_real, D_loss_fake, D_loss_gp]]
+    logging.info('D Loss: R: {} F: {} GP: {}'.format(*losses))
+
+  def compute_G_gradients(print_loss=False):
+    """Compute the generator loss gradients."""
+    with tf.GradientTape() as tape:
+      G_loss = compute_G_loss()
+    log_G_loss(G_loss, print_loss)
+    return tape.gradient(G_loss, G_model.trainable_variables)
+
+  def log_G_loss(G_loss, print_loss=False):
+    """Log the generator loss."""
+    if not print_loss:
+      return
+    G_loss = strategy.reduce(tf.distribute.ReduceOp.SUM, G_loss, axis=None)
+    logging.info('G Loss: {}'.format(G_loss))
+
+  def train_on_batch(G_optimizer, D_optimizer, X_batch, lod_in, print_loss=False):
+    """Train on a single batch of data."""
+    K.set_value(G_lod_in, lod_in)
+    K.set_value(D_lod_in, lod_in)
+
+    for _ in range(D_repeat):
+      D_grads = compute_D_gradients(X_batch, print_loss)
+      D_optimizer.apply_gradients(zip(D_grads, D_model.trainable_variables))
+    
+    G_grads = compute_G_gradients(print_loss)
+    G_optimizer.apply_gradients(zip(G_grads, G_model.trainable_variables))
+
+  @tf.function
+  def distributed_train_on_batch(G_optimizer, D_optimizer, X_batch,
+                                 lod_in=None, print_loss=False):
+    """Distributed training function for training on multiple devices."""
+    strategy.run(train_on_batch,
+                 args=(G_optimizer, D_optimizer, X_batch, lod_in, print_loss))
+
+  # Training loop def end.
+
+  logging.info('Loading dataset...')
   X_train = data.training_data(data_bucket_name,
                                data_filename,
                                resolution,
                                batch_size)
-  debug_log('Data loaded successfully!')
+  logging.info('Data loaded successfully!')
 
   export_path = os.path.join(
       checkpoint_path,
@@ -553,9 +502,9 @@ def train(resolution=128,
 
   for res_log2 in range(2, resolution_log2 + 1):
     cur_resolution = 1 << res_log2
-    debug_log('Training resolution: {}'.format(cur_resolution))
+    logging.info('Training resolution: {}'.format(cur_resolution))
     
-    gan.init_optimizers(cur_resolution)
+    G_optimizer, D_optimizer = init_optimizers(cur_resolution)
 
     if res_log2 == 2:
       total_kimg = kimage_4x4
@@ -579,13 +528,14 @@ def train(resolution=128,
       
       X_batch = next(X_train)
       if (i % print_every_n_batches) == 0:
-        debug_log('Batch: {} / {}'.format(i, n_batches))
-        debug_log('LoD in: {}'.format(lod_in_batch))
+        logging.info('Batch: {} / {}'.format(i, n_batches))
+        logging.info('LoD in: {}'.format(lod_in_batch))
 
-      print_loss = debug_mode and (i % print_every_n_batches) == 0
-      distributed_train_on_batch(gan, X_batch, lod_in=lod_in_batch, print_loss=print_loss)
+      print_loss = (i % print_every_n_batches) == 0
+      distributed_train_on_batch(G_optimizer, D_optimizer, X_batch,
+                                 lod_in=lod_in_batch, print_loss=print_loss)
       
       if (i % save_every_n_batches) == 0 or i == n_batches:
-        debug_log('Saving weights...')
-        gan.save_model(export_path)
-        debug_log('Done.')
+        logging.info('Saving weights...')
+        save_model(G_model, D_model, export_path)
+        logging.info('Done.')
