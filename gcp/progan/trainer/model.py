@@ -399,17 +399,16 @@ def train(resolution=128,
 
   def compute_D_loss(real_imgs):
     """Compute discriminator loss terms."""
-    with strategy.scope():
-      latents_in = np.random.normal(size=(batch_size, latent_size))
-      fake_imgs = G_model(latents_in)
-      interp_imgs = interpolate_imgs(real_imgs, fake_imgs)
-      
-      real_pred = D_model(real_imgs)
-      fake_pred = D_model(fake_imgs)
+    latents_in = np.random.normal(size=(batch_size, latent_size))
+    fake_imgs = G_model(latents_in)
+    interp_imgs = interpolate_imgs(real_imgs, fake_imgs)
+    
+    real_pred = D_model(real_imgs)
+    fake_pred = D_model(fake_imgs)
 
-      real_loss = tf.reduce_mean(real_pred)
-      fake_loss = -tf.reduce_mean(fake_pred)
-      gp_loss = gradient_penalty(interp_imgs)
+    real_loss = tf.reduce_mean(real_pred)
+    fake_loss = -tf.reduce_mean(fake_pred)
+    gp_loss = gradient_penalty(interp_imgs)
 
     return real_loss, fake_loss, gp_loss
 
@@ -430,10 +429,9 @@ def train(resolution=128,
 
   def compute_G_loss():
     """Compute generator loss."""
-    with strategy.scope():
-      latents_in = np.random.normal(size=(batch_size, latent_size))
-      fake_imgs = G_model(latents_in)
-      fake_pred = D_model(fake_imgs)
+    latents_in = np.random.normal(size=(batch_size, latent_size))
+    fake_imgs = G_model(latents_in)
+    fake_pred = D_model(fake_imgs)
     return tf.reduce_mean(fake_pred)
 
   def compute_D_gradients(real_imgs, print_loss=False):
@@ -527,11 +525,11 @@ def train(resolution=128,
         lod_in_batch = lod
       
       X_batch = next(X_train)
-      if (i % print_every_n_batches) == 0:
+      print_loss = (i % print_every_n_batches) == 0
+      if print_loss:
         logging.info('Batch: {} / {}'.format(i, n_batches))
         logging.info('LoD in: {}'.format(lod_in_batch))
 
-      print_loss = (i % print_every_n_batches) == 0
       distributed_train_on_batch(G_optimizer, D_optimizer, X_batch,
                                  lod_in=lod_in_batch, print_loss=print_loss)
       
