@@ -434,57 +434,47 @@ def train(resolution=128,
     fake_pred = D_model(fake_imgs)
     return tf.reduce_mean(fake_pred)
 
-  def compute_D_gradients(real_imgs, print_loss=False):
-    """Compute the discriminator loss gradients."""
-    with tf.GradientTape() as tape:
-      D_loss_real, D_loss_fake, D_loss_gp = compute_D_loss(real_imgs)
-      D_loss = D_loss_real + D_loss_fake + D_loss_gp
-    log_D_loss(D_loss_real, D_loss_fake, D_loss_gp, print_loss)
-    return tape.gradient(D_loss, D_model.trainable_variables)
-
-  def log_D_loss(D_loss_real, D_loss_fake, D_loss_gp,
-                 print_loss=False):
-    """Log the discriminator loss"""
-    if not print_loss:
-      return
-    losses = [strategy.reduce(tf.distribute.ReduceOp.SUM, loss, axis=None)
-              for loss in [D_loss_real, D_loss_fake, D_loss_gp]]
-    logging.info('D Loss: R: {} F: {} GP: {}'.format(*losses))
-
-  def compute_G_gradients(print_loss=False):
-    """Compute the generator loss gradients."""
-    with tf.GradientTape() as tape:
-      G_loss = compute_G_loss()
-    log_G_loss(G_loss, print_loss)
-    return tape.gradient(G_loss, G_model.trainable_variables)
-
-  def log_G_loss(G_loss, print_loss=False):
-    """Log the generator loss."""
-    if not print_loss:
-      return
-    G_loss = strategy.reduce(tf.distribute.ReduceOp.SUM, G_loss, axis=None)
-    logging.info('G Loss: {}'.format(G_loss))
-
   def train_on_batch(G_optimizer, D_optimizer, X_batch, lod_in, print_loss=False):
     """Train on a single batch of data."""
     K.set_value(G_lod_in, lod_in)
     K.set_value(D_lod_in, lod_in)
 
     for _ in range(D_repeat):
-      D_grads = compute_D_gradients(X_batch, print_loss)
+      with tf.GradientTape() as tape:
+        D_loss_real, D_loss_fake, D_loss_gp = compute_D_loss(real_imgs)
+        D_loss = D_loss_real + D_loss_fake + D_loss_gp
+      D_grads = tape.gradient(D_loss, D_model.trainable_variables)
       D_optimizer.apply_gradients(zip(D_grads, D_model.trainable_variables))
     
-    G_grads = compute_G_gradients(print_loss)
+    with tf.GradientTape() as tape:
+      G_loss = compute_G_loss()
+    G_grads = tape.gradient(G_loss, G_model.trainable_variables)
     G_optimizer.apply_gradients(zip(G_grads, G_model.trainable_variables))
+
+    return (D_loss_real, D_loss_fake, D_loss_gp), G_loss
 
   @tf.function
   def distributed_train_on_batch(G_optimizer, D_optimizer, X_batch,
                                  lod_in=None, print_loss=False):
     """Distributed training function for training on multiple devices."""
-    strategy.run(train_on_batch,
-                 args=(G_optimizer, D_optimizer, X_batch, lod_in, print_loss))
+    return strategy.run(
+        train_on_batch,
+        args=(G_optimizer, D_optimizer, X_batch, lod_in, print_loss))
 
   # Training loop def end.
+
+  def log_D_loss(D_loss_real, D_loss_fake, D_loss_gp):
+    """Log the discriminator loss"""
+    losses = [strategy.reduce(tf.distribute.ReduceOp.SUM, loss, axis=None)
+              for loss in [D_loss_real, D_loss_fake, D_loss_gp]]
+    losses = [x // strategy.num_replicas_in_sync for x in losses]
+    logging.info('D Loss: R: {} F: {} GP: {}'.format(*losses))
+
+  def log_G_loss(G_loss):
+    """Log the generator loss."""
+    G_loss = strategy.reduce(tf.distribute.ReduceOp.SUM, G_loss, axis=None)
+    G_loss //= strategy.num_replicas_in_sync
+    logging.info('G Loss: {}'.format(G_loss))
 
   logging.info('Loading dataset...')
   X_train = data.training_data(data_bucket_name,
@@ -530,8 +520,13 @@ def train(resolution=128,
         logging.info('Batch: {} / {}'.format(i, n_batches))
         logging.info('LoD in: {}'.format(lod_in_batch))
 
-      distributed_train_on_batch(G_optimizer, D_optimizer, X_batch,
-                                 lod_in=lod_in_batch, print_loss=print_loss)
+      (D_loss_real, D_loss_fake, D_loss_gp), G_loss = distributed_train_on_batch(
+          G_optimizer, D_optimizer, X_batch,
+          lod_in=lod_in_batch, print_loss=print_loss)
+
+      if print_loss:
+        log_D_loss(D_loss_real, D_loss_fake, D_loss_gp)
+        log_G_loss(G_loss)
       
       if (i % save_every_n_batches) == 0 or i == n_batches:
         logging.info('Saving weights...')
