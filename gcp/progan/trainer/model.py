@@ -441,7 +441,7 @@ def train(resolution=128,
 
     for _ in range(D_repeat):
       with tf.GradientTape() as tape:
-        D_loss_real, D_loss_fake, D_loss_gp = compute_D_loss(real_imgs)
+        D_loss_real, D_loss_fake, D_loss_gp = compute_D_loss(X_batch)
         D_loss = D_loss_real + D_loss_fake + D_loss_gp
       D_grads = tape.gradient(D_loss, D_model.trainable_variables)
       D_optimizer.apply_gradients(zip(D_grads, D_model.trainable_variables))
@@ -467,13 +467,13 @@ def train(resolution=128,
     """Log the discriminator loss"""
     losses = [strategy.reduce(tf.distribute.ReduceOp.SUM, loss, axis=None)
               for loss in [D_loss_real, D_loss_fake, D_loss_gp]]
-    losses = [x // strategy.num_replicas_in_sync for x in losses]
+    losses = [x / strategy.num_replicas_in_sync for x in losses]
     logging.info('D Loss: R: {} F: {} GP: {}'.format(*losses))
 
   def log_G_loss(G_loss):
     """Log the generator loss."""
     G_loss = strategy.reduce(tf.distribute.ReduceOp.SUM, G_loss, axis=None)
-    G_loss //= strategy.num_replicas_in_sync
+    G_loss /= strategy.num_replicas_in_sync
     logging.info('G Loss: {}'.format(G_loss))
 
   logging.info('Loading dataset...')
