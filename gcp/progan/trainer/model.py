@@ -384,16 +384,27 @@ def train(resolution=128,
                           use_wscale=use_wscale,
                           mbstd_group_size=mbstd_group_size)
 
-  def init_optimizers(resolution):
+  def init_optimizers():
     """Initialize the optimizers for the given resolution."""
     with strategy.scope():
-      res_log2 = int(np.log2(resolution))
-      lr = learning_rate * (learning_rate_decay ** (res_log2 - 2))
-      G_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
+      G_optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.99,
                                              epsilon=1e-8)
-      D_optimizer = tf.keras.optimizers.Adam(lr, beta_1=0.0, beta_2=0.99,
+      D_optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.99,
                                              epsilon=1e-8)
     return G_optimizer, D_optimizer
+
+  def reset_optimizers(G_optimizer, D_optimizer, res_log2):
+    """Reset the optimizer state for the next resolution of training. Also adjust LR."""
+    with strategy.scope():
+      lr = learning_rate * (learning_rate_decay ** (res_log2 - 2))
+      for opt in [G_optimizer, D_optimizer]:
+        weights = opt.get_weights()
+        opt.set_weights([
+            0.0 if isinstance(w, float) else np.zeros(w.shape, dtype=w.dtype)
+            for w in weights
+        ])
+        K.set_value(opt.iterations, 0)
+        K.set_value(opt.lr, lr)
 
   # Training loop def start.
 
@@ -486,13 +497,16 @@ def train(resolution=128,
   export_path = os.path.join(
       checkpoint_path,
       '{}x{}'.format(*([resolution] * 2)),
-      datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+      datetime.datetime.now().strftime("%Y%m%d%H%M%S"))  
+    
+  G_optimizer, D_optimizer = init_optimizers()
 
   for res_log2 in range(2, resolution_log2 + 1):
     cur_resolution = 1 << res_log2
     logging.info('Training resolution: {}'.format(cur_resolution))
-    
-    G_optimizer, D_optimizer = init_optimizers(cur_resolution)
+
+    if res_log2 > 2:
+      reset_optimizers(G_optimizer, D_optimizer, res_log2)
 
     if res_log2 == 2:
       total_kimg = kimage_4x4
