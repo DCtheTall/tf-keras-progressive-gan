@@ -384,16 +384,12 @@ def train(resolution=128,
                           use_wscale=use_wscale,
                           mbstd_group_size=mbstd_group_size)
 
-  def init_optimizers():
-    """Initialize the optimizers for the given resolution."""
-    with strategy.scope():
-      G_optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.99,
-                                             epsilon=1e-8)
-      D_optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.99,
-                                             epsilon=1e-8)
-    return G_optimizer, D_optimizer
+    G_optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.99,
+                                           epsilon=1e-8)
+    D_optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.99,
+                                           epsilon=1e-8)
 
-  def reset_optimizers(G_optimizer, D_optimizer, res_log2):
+  def reset_optimizers(res_log2):
     """Reset the optimizer state for the next resolution of training. Also adjust LR."""
     with strategy.scope():
       lr = learning_rate * (learning_rate_decay ** (res_log2 - 2))
@@ -445,11 +441,8 @@ def train(resolution=128,
     fake_pred = D_model(fake_imgs)
     return tf.reduce_mean(fake_pred)
 
-  def train_on_batch(G_optimizer, D_optimizer, X_batch, lod_in, print_loss=False):
+  def train_on_batch(X_batch):
     """Train on a single batch of data."""
-    K.set_value(G_lod_in, lod_in)
-    K.set_value(D_lod_in, lod_in)
-
     for _ in range(D_repeat):
       with tf.GradientTape() as tape:
         D_loss_real, D_loss_fake, D_loss_gp = compute_D_loss(X_batch)
@@ -465,12 +458,9 @@ def train(resolution=128,
     return (D_loss_real, D_loss_fake, D_loss_gp), G_loss
 
   @tf.function
-  def distributed_train_on_batch(G_optimizer, D_optimizer, X_batch,
-                                 lod_in=None, print_loss=False):
+  def distributed_train_on_batch(X_batch):
     """Distributed training function for training on multiple devices."""
-    return strategy.run(
-        train_on_batch,
-        args=(G_optimizer, D_optimizer, X_batch, lod_in, print_loss))
+    return strategy.run(train_on_batch, args=(X_batch,))
 
   # Training loop def end.
 
@@ -497,16 +487,14 @@ def train(resolution=128,
   export_path = os.path.join(
       checkpoint_path,
       '{}x{}'.format(*([resolution] * 2)),
-      datetime.datetime.now().strftime("%Y%m%d%H%M%S"))  
-    
-  G_optimizer, D_optimizer = init_optimizers()
+      datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
   for res_log2 in range(2, resolution_log2 + 1):
     cur_resolution = 1 << res_log2
     logging.info('Training resolution: {}'.format(cur_resolution))
 
     if res_log2 > 2:
-      reset_optimizers(G_optimizer, D_optimizer, res_log2)
+      reset_optimizers(res_log2)
 
     if res_log2 == 2:
       total_kimg = kimage_4x4
@@ -523,20 +511,23 @@ def train(resolution=128,
 
     for i in range(1, n_batches + 1):
       img_count += batch_size
-      if res_log2 > 2:
-        lod_in_batch = compute_lod_in(lod, img_count, transition_kimg)
-      else:
-        lod_in_batch = lod
-      
-      X_batch = next(X_train)
+
       print_loss = (i % print_every_n_batches) == 0
       if print_loss:
         logging.info('Batch: {} / {}'.format(i, n_batches))
         logging.info('LoD in: {}'.format(lod_in_batch))
 
-      (D_loss_real, D_loss_fake, D_loss_gp), G_loss = distributed_train_on_batch(
-          G_optimizer, D_optimizer, X_batch,
-          lod_in=lod_in_batch, print_loss=print_loss)
+      if res_log2 > 2:
+        lod_in_batch = compute_lod_in(lod, img_count, transition_kimg)
+      else:
+        lod_in_batch = lod
+      K.set_value(G_lod_in, lod_in_batch)
+      K.set_value(D_lod_in, lod_in_batch)
+      
+      X_batch = next(X_train)
+
+      (D_loss_real, D_loss_fake, D_loss_gp), G_loss = \
+          distributed_train_on_batch(X_batch)
 
       if print_loss:
         log_D_loss(D_loss_real, D_loss_fake, D_loss_gp)

@@ -108,7 +108,7 @@ if __name__ == '__main__':
   parser.add_argument('--print_every_n_batches',
                       help='Logs progress every N training batches',
                       type=int,
-                      default=200)
+                      default=100)
   parser.add_argument('--save_every_n_batches',
                       help='Saves model every N training batches',
                       type=int,
