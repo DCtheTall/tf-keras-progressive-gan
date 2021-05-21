@@ -113,6 +113,14 @@ if __name__ == '__main__':
                       help='Saves model every N training batches',
                       type=int,
                       default=1000)
+  parser.add_argument('--start_from_resolution',
+                      help='Load previously trained weights at this resolution',
+                      type=int,
+                      default=None)
+  parser.add_argument('--previous_weights_path',
+                      help='Path to the weights trained for a smaller resolution',
+                      type=str,
+                      default=None)
 
   args = parser.parse_args()
   arguments = args.__dict__

@@ -8,6 +8,10 @@ import tensorflow.keras.backend as K
 from trainer import data
 
 
+G_DIR = 'gen/'
+D_DIR = 'disc/'
+
+
 def n_filters(stage, fmap_base, fmap_max, fmap_decay):
   """Get the number of filters in a convolutional layer."""
   return int(min(fmap_max, fmap_base / 2.0 ** (stage * fmap_decay)))
@@ -330,8 +334,31 @@ def compute_lod_in(lod, cur_img, transition_kimg):
 
 def save_model(G, D, export_path):
   """Save the model parameters to GCS."""
-  G.save(os.path.join(export_path, 'gen/'))
-  D.save(os.path.join(export_path, 'disc/'))
+  G.save(os.path.join(export_path, G_DIR))
+  D.save(os.path.join(export_path, D_DIR))
+
+
+def transfer_weights(G, D, G_prev, D_prev):
+  """Transfer weights from a previous resolution to the provided models."""
+  prev_weights_G = {}
+  for layer in G_prev.layers:
+    w = layer.get_weights()
+    if w:
+      prev_weights_G[layer.name] = np.array(w)
+
+  prev_weights_D = {}
+  for layer in D_prev.layers:
+    w = layer.get_weights()
+    if w:
+      prev_weights_D[layer.name] = np.array(w)
+
+  for layer in G.layers:
+    if layer.name in prev_weights_G:
+      layer.set_weights(prev_weights_G[layer.name])
+
+  for layer in D.layers:
+    if layer.name in prev_weights_D:
+      layer.set_weights(prev_weights_D[layer.name])
 
 
 def train(resolution=128,
@@ -357,7 +384,9 @@ def train(resolution=128,
           data_filename=None,
           checkpoint_path=None,
           print_every_n_batches=25,
-          save_every_n_batches=1000):
+          save_every_n_batches=1000,
+          start_from_resolution=None,
+          previous_weights_path=None):
   """Training loop for training the GAN up to the provided resolution."""
   resolution_log2 = int(np.log2(resolution))
   if latent_size is None:
@@ -383,6 +412,15 @@ def train(resolution=128,
                           fmap_max=fmap_max,
                           use_wscale=use_wscale,
                           mbstd_group_size=mbstd_group_size)
+
+    if start_from_resolution is not None:
+      G_prev = tf.keras.models.load_model(
+          os.path.join(previous_weights_path, G_DIR),
+          custom_objects={'G_prev': G})
+      D_prev = tf.keras.models.load_model(
+          os.path.join(previous_weights_path, D_DIR),
+          custom_objects={'D_prev': D})
+      transfer_weights(G_model, D_model, G_prev, D_prev)
 
     G_optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.99,
                                            epsilon=1e-8)
@@ -489,7 +527,8 @@ def train(resolution=128,
       '{}x{}'.format(*([resolution] * 2)),
       datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
-  for res_log2 in range(2, resolution_log2 + 1):
+  start = start_from_resolution or 2
+  for res_log2 in range(start, resolution_log2 + 1):
     cur_resolution = 1 << res_log2
     logging.info('Training resolution: {}'.format(cur_resolution))
 
