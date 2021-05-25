@@ -421,6 +421,7 @@ def train(resolution=128,
           os.path.join(previous_weights_path, D_DIR),
           custom_objects={'D_prev': D})
       transfer_weights(G_model, D_model, G_prev, D_prev)
+      del G_prev, D_prev
 
     G_optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.99,
                                            epsilon=1e-8)
