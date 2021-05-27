@@ -528,7 +528,9 @@ def train(resolution=128,
       '{}x{}'.format(*([resolution] * 2)),
       datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
-  start = start_from_resolution or 2
+  start = 2
+  if start_from_resolution:
+    start = int(np.log2(start_from_resolution )) + 1
   for res_log2 in range(start, resolution_log2 + 1):
     cur_resolution = 1 << res_log2
     logging.info('Training resolution: {}'.format(cur_resolution))
