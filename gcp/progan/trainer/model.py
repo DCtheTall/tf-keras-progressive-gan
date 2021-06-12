@@ -544,7 +544,7 @@ def train(resolution=128,
       total_kimg = kimage_large
     else:
       total_kimg = kimage
-    transition_kimg = total_kimg // 4
+    transition_kimg = total_kimg // 2
 
     img_count = 0
     n_batches = (total_kimg * 1000) // batch_size
