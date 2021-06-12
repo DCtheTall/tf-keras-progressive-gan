@@ -2,6 +2,7 @@ import datetime
 import logging
 import numpy as np
 import os
+import skimage
 import tensorflow as tf
 import tensorflow.keras.backend as K
 
@@ -338,8 +339,10 @@ def save_model(G, D, export_path):
   D.save(os.path.join(export_path, D_DIR))
 
 
-def transfer_weights(G, D, G_prev, D_prev):
+def transfer_weights(G, D, G_prev, D_prev, G_lod_in, latent_size,
+                     resolution, start_from_resolution):
   """Transfer weights from a previous resolution to the provided models."""
+  logging.info('Transferring weights from a previous model...')
   prev_weights_G = {}
   for layer in G_prev.layers:
     w = layer.get_weights()
@@ -359,6 +362,18 @@ def transfer_weights(G, D, G_prev, D_prev):
   for layer in D.layers:
     if layer.name in prev_weights_D:
       layer.set_weights(prev_weights_D[layer.name])
+
+  K.set_value(
+      G_lod_in,
+      int(np.log2(resolution)) - int(np.log2(start_from_resolution)))
+  z = np.random.normal(size=(1, latent_size))
+  np.testing.assert_allclose(
+      skimage.transform.resize(
+          np.array(G.predict(z)).squeeze(),
+          (start_from_resolution,) * 2),
+      np.array(G_prev.predict(z)).squeeze())
+
+  logging.info('Weight transfer complete.')
 
 
 def train(resolution=128,
@@ -420,7 +435,8 @@ def train(resolution=128,
       D_prev = tf.keras.models.load_model(
           os.path.join(previous_weights_path, D_DIR),
           custom_objects={'D_prev': D})
-      transfer_weights(G_model, D_model, G_prev, D_prev)
+      transfer_weights(G_model, D_model, G_prev, D_prev, G_lod_in,
+                       latent_size, resolution, start_from_resolution)
       del G_prev, D_prev
 
     G_optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.99,
