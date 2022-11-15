@@ -1,6 +1,6 @@
 <img src="./deepfakes.png">
 
-# Implementing progressive growing of GANs with Keras and TensorFlow
+# Implementing Progressive Growing of GANs (PGGANs) with Keras and TensorFlow
 
 This repository contains an implementation of
 [progressive growing of GANs](https://arxiv.org/abs/1710.10196)
